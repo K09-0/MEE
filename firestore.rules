@@ -1,0 +1,254 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    
+    // ==================== HELPER FUNCTIONS ====================
+    
+    // Check if user is authenticated
+    function isAuthenticated() {
+      return request.auth != null;
+    }
+    
+    // Check if user is accessing their own data
+    function isOwner(userId) {
+      return isAuthenticated() && request.auth.uid == userId;
+    }
+    
+    // Check if user is admin
+    function isAdmin() {
+      return isAuthenticated() && 
+        get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role == 'admin';
+    }
+    
+    // Check if user is moderator or admin
+    function isModerator() {
+      return isAuthenticated() && 
+        get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role in ['moderator', 'admin'];
+    }
+    
+    // Validate email format
+    function isValidEmail(email) {
+      return email.matches('^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\\.[a-zA-Z]{2,}$');
+    }
+    
+    // Validate username format
+    function isValidUsername(username) {
+      return username.matches('^[a-zA-Z0-9_]{3,20}$');
+    }
+    
+    // Check if timestamp is valid
+    function isValidTimestamp(field) {
+      return request.resource.data[field] is timestamp;
+    }
+    
+    // ==================== USERS COLLECTION ====================
+    
+    match /users/{userId} {
+      // Allow read if authenticated
+      allow read: if isAuthenticated();
+      
+      // Allow create only for self during registration
+      allow create: if isOwner(userId)
+        && request.resource.data.keys().hasAll(['email', 'referralCode', 'createdAt', 'updatedAt'])
+        && request.resource.data.email is string
+        && isValidEmail(request.resource.data.email)
+        && request.resource.data.referralCode is string
+        && request.resource.data.role == 'user'
+        && request.resource.data.status == 'active'
+        && request.resource.data.balance == 0
+        && isValidTimestamp('createdAt')
+        && isValidTimestamp('updatedAt');
+      
+      // Allow update only for self
+      allow update: if isOwner(userId)
+        && (
+          // Profile updates
+          request.resource.data.diff(resource.data).affectedKeys()
+            .hasOnly(['displayName', 'username', 'bio', 'avatarUrl', 'dateOfBirth', 
+                      'interests', 'preferences', 'updatedAt'])
+          // Wallet linking
+          || request.resource.data.diff(resource.data).affectedKeys()
+            .hasOnly(['walletAddress', 'walletType', 'updatedAt'])
+        )
+        && (!request.resource.data.keys().hasAny(['username']) 
+            || isValidUsername(request.resource.data.username))
+        && isValidTimestamp('updatedAt');
+      
+      // Only admin can delete
+      allow delete: if isAdmin();
+    }
+    
+    // ==================== EXPERIENCES COLLECTION ====================
+    
+    match /experiences/{experienceId} {
+      // Allow public read for active experiences
+      allow read: if resource == null 
+        || resource.data.status in ['active', 'soldOut', 'expired']
+        || (isAuthenticated() && resource.data.creatorId == request.auth.uid);
+      
+      // Allow create for authenticated users
+      allow create: if isAuthenticated()
+        && request.resource.data.creatorId == request.auth.uid
+        && request.resource.data.status == 'draft'
+        && request.resource.data.price >= 0.99
+        && request.resource.data.price <= 4.99
+        && request.resource.data.title is string
+        && request.resource.data.title.size() > 0
+        && request.resource.data.title.size() <= 100
+        && request.resource.data.contentUrl is string
+        && isValidTimestamp('createdAt')
+        && isValidTimestamp('expiresAt');
+      
+      // Allow update for creator or moderator
+      allow update: if (isAuthenticated() && resource.data.creatorId == request.auth.uid
+        && (
+          // Creator can update draft
+          (resource.data.status == 'draft' 
+            && request.resource.data.status in ['draft', 'pending', 'active'])
+          // Creator can hide active experience
+          || (resource.data.status == 'active' 
+            && request.resource.data.status == 'hidden')
+          // Creator can reactivate hidden experience
+          || (resource.data.status == 'hidden' 
+            && request.resource.data.status == 'active')
+        ))
+        || isModerator();
+      
+      // Allow delete only for creator if no sales
+      allow delete: if isAuthenticated() 
+        && resource.data.creatorId == request.auth.uid
+        && resource.data.salesCount == 0;
+    }
+    
+    // ==================== TRANSACTIONS COLLECTION ====================
+    
+    match /transactions/{transactionId} {
+      // Allow read for buyer or seller
+      allow read: if isAuthenticated()
+        && (resource.data.buyerId == request.auth.uid 
+            || resource.data.sellerId == request.auth.uid);
+      
+      // Only Cloud Functions can create/update
+      allow create: if false;
+      allow update: if false;
+      allow delete: if false;
+    }
+    
+    // ==================== WALLETS COLLECTION ====================
+    
+    match /wallets/{userId} {
+      // Allow read for owner
+      allow read: if isOwner(userId);
+      
+      // Only Cloud Functions can write
+      allow create: if false;
+      allow update: if false;
+      allow delete: if false;
+    }
+    
+    // ==================== LIKES COLLECTION ====================
+    
+    match /likes/{likeId} {
+      // Allow read for authenticated users
+      allow read: if isAuthenticated();
+      
+      // Allow create for authenticated users
+      allow create: if isAuthenticated()
+        && request.resource.data.userId == request.auth.uid
+        && isValidTimestamp('createdAt');
+      
+      // Allow delete for owner
+      allow delete: if isAuthenticated() 
+        && resource.data.userId == request.auth.uid;
+    }
+    
+    // ==================== REPORTS COLLECTION ====================
+    
+    match /reports/{reportId} {
+      // Allow read for moderators
+      allow read: if isModerator();
+      
+      // Allow create for authenticated users
+      allow create: if isAuthenticated()
+        && request.resource.data.reporterId == request.auth.uid
+        && request.resource.data.reason is string
+        && request.resource.data.reason.size() > 0
+        && isValidTimestamp('createdAt');
+      
+      // Allow update for moderators
+      allow update: if isModerator();
+      
+      // No delete
+      allow delete: if false;
+    }
+    
+    // ==================== AI GENERATIONS COLLECTION ====================
+    
+    match /ai_generations/{generationId} {
+      // Allow read for owner
+      allow read: if isAuthenticated() 
+        && resource.data.userId == request.auth.uid;
+      
+      // Allow create for authenticated users
+      allow create: if isAuthenticated()
+        && request.resource.data.userId == request.auth.uid
+        && isValidTimestamp('createdAt');
+      
+      // Allow update for owner
+      allow update: if isAuthenticated() 
+        && resource.data.userId == request.auth.uid;
+      
+      // Allow delete for owner
+      allow delete: if isAuthenticated() 
+        && resource.data.userId == request.auth.uid;
+    }
+    
+    // ==================== REFERRALS COLLECTION ====================
+    
+    match /referrals/{referralId} {
+      // Allow read for referrer or referred
+      allow read: if isAuthenticated()
+        && (resource.data.referrerId == request.auth.uid 
+            || resource.data.referredId == request.auth.uid);
+      
+      // Only Cloud Functions can write
+      allow create: if false;
+      allow update: if false;
+      allow delete: if false;
+    }
+    
+    // ==================== NOTIFICATIONS COLLECTION ====================
+    
+    match /notifications/{notificationId} {
+      // Allow read for owner
+      allow read: if isAuthenticated() 
+        && resource.data.userId == request.auth.uid;
+      
+      // Only Cloud Functions can create
+      allow create: if false;
+      
+      // Allow update for owner (mark as read)
+      allow update: if isAuthenticated() 
+        && resource.data.userId == request.auth.uid
+        && request.resource.data.diff(resource.data).affectedKeys()
+          .hasOnly(['isRead', 'readAt']);
+      
+      // Allow delete for owner
+      allow delete: if isAuthenticated() 
+        && resource.data.userId == request.auth.uid;
+    }
+    
+    // ==================== ADMIN COLLECTION ====================
+    
+    match /admin/{document} {
+      // Only admin can access
+      allow read, write: if isAdmin();
+    }
+    
+    // ==================== DEFAULT DENY ====================
+    
+    match /{document=**} {
+      allow read, write: if false;
+    }
+  }
+}

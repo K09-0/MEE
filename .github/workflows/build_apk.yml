@@ -1,0 +1,97 @@
+# ==========================================
+# MEE App - GitHub Actions Build APK
+# ==========================================
+
+name: Build APK
+
+on:
+  push:
+    branches: [ main, develop ]
+  pull_request:
+    branches: [ main ]
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    
+    steps:
+    # Checkout repository
+    - name: Checkout code
+      uses: actions/checkout@v4
+    
+    # Setup Java
+    - name: Setup Java
+      uses: actions/setup-java@v4
+      with:
+        java-version: '17'
+        distribution: 'temurin'
+    
+    # Setup Flutter
+    - name: Setup Flutter
+      uses: subosito/flutter-action@v2
+      with:
+        flutter-version: '3.16.0'
+        channel: 'stable'
+    
+    # Cache Flutter dependencies
+    - name: Cache Flutter dependencies
+      uses: actions/cache@v3
+      with:
+        path: |
+          ~/.pub-cache
+          ${{ github.workspace }}/.dart_tool
+        key: ${{ runner.os }}-flutter-${{ hashFiles('**/pubspec.lock') }}
+        restore-keys: |
+          ${{ runner.os }}-flutter-
+    
+    # Get dependencies
+    - name: Get dependencies
+      run: flutter pub get
+    
+    # Analyze code
+    - name: Analyze code
+      run: flutter analyze
+    
+    # Run tests
+    - name: Run tests
+      run: flutter test
+    
+    # Build APK
+    - name: Build APK
+      run: flutter build apk --release
+    
+    # Upload APK as artifact
+    - name: Upload APK
+      uses: actions/upload-artifact@v4
+      with:
+        name: mee-app-apk
+        path: build/app/outputs/flutter-apk/app-release.apk
+        retention-days: 7
+    
+    # Build App Bundle
+    - name: Build App Bundle
+      run: flutter build appbundle --release
+    
+    # Upload AAB as artifact
+    - name: Upload AAB
+      uses: actions/upload-artifact@v4
+      with:
+        name: mee-app-aab
+        path: build/app/outputs/bundle/release/app-release.aab
+        retention-days: 7
+    
+    # Create Release (only on main branch)
+    - name: Create Release
+      if: github.ref == 'refs/heads/main' && github.event_name == 'push'
+      uses: softprops/action-gh-release@v1
+      with:
+        files: |
+          build/app/outputs/flutter-apk/app-release.apk
+          build/app/outputs/bundle/release/app-release.aab
+        tag_name: v${{ github.run_number }}
+        name: Release v${{ github.run_number }}
+        draft: true
+        prerelease: false
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
