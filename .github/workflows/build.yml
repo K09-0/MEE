@@ -1,8 +1,6 @@
 name: Build APK
 
 on:
-  push:
-    branches: [ main, master ]
   workflow_dispatch:
 
 jobs:
@@ -15,7 +13,6 @@ jobs:
         uses: subosito/flutter-action@v2
         with:
           flutter-version: '3.24.0'
-          channel: 'stable'
       
       - name: Setup Java
         uses: actions/setup-java@v4
