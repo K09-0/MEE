@@ -26,9 +26,7 @@ jobs:
           sed -i '/dartdoc/d' pubspec.yaml
           sed -i '/bloc_test/d' pubspec.yaml
           sed -i 's/intl: \^0.18.1/intl: ^0.19.0/' pubspec.yaml
-      
-      - name: Get dependencies
-        run: flutter pub get
+          flutter pub get
       
       - name: Build APK
         run: flutter build apk --release
